@@ -26,14 +26,14 @@ impl Error for TrieError {}
 impl fmt::Display for TrieError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         let printable = match *self {
-            TrieError::DB(ref err) => format!("trie error: {:?}", err),
-            TrieError::Decoder(ref err) => format!("trie error: {:?}", err),
+            TrieError::DB(ref err) => format!("trie error: {err:?}"),
+            TrieError::Decoder(ref err) => format!("trie error: {err:?}"),
             TrieError::InvalidData => "trie error: invalid data".to_owned(),
             TrieError::InvalidStateRoot => "trie error: invalid state root".to_owned(),
             TrieError::InvalidProof => "trie error: invalid proof".to_owned(),
             TrieError::MissingTrieNode { .. } => "trie error: missing node".to_owned(),
         };
-        write!(f, "{}", printable)
+        write!(f, "{printable}")
     }
 }
 
