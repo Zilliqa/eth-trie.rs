@@ -16,7 +16,7 @@ const HASHED_LENGTH: usize = 32;
 
 pub struct RootWithTrieDiff {
     pub root: B256,
-    pub trie_diff: HashMap<B256, Vec<u8>>,
+    pub trie_diff: HashMap<Vec<u8>, Vec<u8>>,
 }
 
 pub trait Trie<D: DB> {
@@ -73,9 +73,9 @@ where
     pub db: Arc<D>,
 
     // The batch of pending new nodes to write
-    cache: HashMap<B256, Vec<u8>>,
-    passing_keys: HashSet<B256>,
-    gen_keys: HashSet<B256>,
+    cache: HashMap<Vec<u8>, Vec<u8>>,
+    passing_keys: HashSet<Vec<u8>>,
+    gen_keys: HashSet<Vec<u8>>,
 }
 
 enum EncodedNode {
@@ -251,6 +251,19 @@ where
         }
     }
 
+    pub fn at_root(&self, root_hash: B256) -> Self {
+        Self {
+            root: Node::from_hash(root_hash),
+            root_hash,
+
+            cache: HashMap::new(),
+            passing_keys: HashSet::new(),
+            gen_keys: HashSet::new(),
+
+            db: self.db.clone(),
+        }
+    }
+
     pub fn from(db: Arc<D>, root: B256) -> TrieResult<Self> {
         match db
             .get(root.as_slice())
@@ -305,7 +318,7 @@ where
     /// Checks that the key is present in the trie
     fn contains(&self, key: &[u8]) -> TrieResult<bool> {
         let path = &Nibbles::from_raw(key, true);
-        Ok(self.get_at(&self.root, path, 0)?.map_or(false, |_| true))
+        Ok(self.get_at(&self.root, path, 0)?.is_some())
     }
 
     /// Inserts value into trie and modifies it if it exists
@@ -492,6 +505,7 @@ where
         let partial = &path.offset(path_index);
         match source_node {
             Node::Empty => Ok(None),
+            Node::Hash(hash_node) if hash_node.hash == KECCAK_NULL_RLP.0 => Ok(None),
             Node::Leaf(leaf) => {
                 if &leaf.key == partial {
                     Ok(Some(leaf.value.clone()))
@@ -625,7 +639,7 @@ where
             }
             Node::Hash(hash_node) => {
                 let node_hash = hash_node.hash;
-                self.passing_keys.insert(node_hash);
+                self.passing_keys.insert(node_hash.to_vec());
                 let node =
                     self.recover_from_db(node_hash)?
                         .ok_or_else(|| TrieError::MissingTrieNode {
@@ -693,7 +707,7 @@ where
             }
             Node::Hash(hash_node) => {
                 let hash = hash_node.hash;
-                self.passing_keys.insert(hash);
+                self.passing_keys.insert(hash.to_vec());
 
                 let node =
                     self.recover_from_db(hash)?
@@ -765,7 +779,7 @@ where
                     // try again after recovering node from the db.
                     Node::Hash(hash_node) => {
                         let node_hash = hash_node.hash;
-                        self.passing_keys.insert(node_hash);
+                        self.passing_keys.insert(node_hash.to_vec());
 
                         let new_node =
                             self.recover_from_db(node_hash)?
@@ -845,7 +859,7 @@ where
             EncodedNode::Hash(hash) => hash,
             EncodedNode::Inline(encoded) => {
                 let hash: B256 = keccak(&encoded).as_fixed_bytes().into();
-                self.cache.insert(hash, encoded);
+                self.cache.insert(hash.to_vec(), encoded);
                 hash
             }
         };
@@ -869,7 +883,7 @@ where
         let removed_keys: Vec<Vec<u8>> = self
             .passing_keys
             .iter()
-            .filter(|h| !self.gen_keys.contains(*h))
+            .filter(|h| !self.gen_keys.contains(&h.to_vec()))
             .map(|h| h.to_vec())
             .collect();
 
@@ -902,9 +916,9 @@ where
             EncodedNode::Inline(data)
         } else {
             let hash: B256 = keccak(&data).as_fixed_bytes().into();
-            self.cache.insert(hash, data);
+            self.cache.insert(hash.to_vec(), data);
 
-            self.gen_keys.insert(hash);
+            self.gen_keys.insert(hash.to_vec());
             EncodedNode::Hash(hash)
         }
     }
