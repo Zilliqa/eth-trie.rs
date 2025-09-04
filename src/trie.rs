@@ -2,9 +2,10 @@ use std::sync::{Arc, RwLock};
 use std::vec;
 
 use alloy_primitives::{Bytes, B256};
-use alloy_rlp::{Buf, BufMut, Encodable, Header, EMPTY_STRING_CODE};
+use alloy_rlp::{Buf, Header};
 use hashbrown::{HashMap, HashSet};
 use keccak_hash::{keccak, KECCAK_NULL_RLP};
+use rlp::{DecoderError, Prototype, Rlp, RlpStream};
 
 use crate::db::{MemoryDB, DB};
 use crate::errors::TrieError;
@@ -281,7 +282,8 @@ where
                     db,
                 };
 
-                trie.root = EthTrie::<D>::decode_node(&mut data.as_slice())?;
+                trie.root = EthTrie::<D>::decode_node(&mut data.as_slice())
+                    .map_err(|e| TrieError::DB(e.to_string()))?;
                 Ok(trie)
             }
             None => Err(TrieError::InvalidStateRoot),
@@ -925,80 +927,105 @@ where
 
     fn encode_raw(&mut self, node: &Node) -> Vec<u8> {
         match node {
-            Node::Empty => vec![EMPTY_STRING_CODE],
+            Node::Empty => rlp::NULL_RLP.to_vec(),
             Node::Leaf(leaf) => {
-                let mut buf = Vec::<u8>::new();
-                let mut list = Vec::<u8>::new();
-                leaf.key.encode_compact().as_slice().encode(&mut list);
-                leaf.value.as_slice().encode(&mut list);
-                let header = Header {
-                    list: true,
-                    payload_length: list.len(),
-                };
-                header.encode(&mut buf);
-                buf.extend_from_slice(&list);
-                buf
+                let mut stream = RlpStream::new_list(2);
+                stream.append(&leaf.key.encode_compact());
+                stream.append(&leaf.value);
+                stream.out().to_vec()
             }
             Node::Branch(branch) => {
-                let borrow_branch = branch.read().expect("to read branch node");
-                let mut buf = Vec::<u8>::new();
-                let mut list = Vec::<u8>::new();
+                let borrow_branch = branch.read().unwrap();
+
+                let mut stream = RlpStream::new_list(17);
                 for i in 0..16 {
                     let n = &borrow_branch.children[i];
                     match self.write_node(n) {
-                        EncodedNode::Hash(hash) => hash.as_slice().encode(&mut list),
-                        EncodedNode::Inline(data) => list.extend_from_slice(data.as_slice()),
+                        EncodedNode::Hash(hash) => stream.append(&hash.as_slice()),
+                        EncodedNode::Inline(data) => stream.append_raw(&data, 1),
                     };
                 }
 
                 match &borrow_branch.value {
-                    Some(v) => v.as_slice().encode(&mut list),
-                    None => list.put_u8(EMPTY_STRING_CODE),
+                    Some(v) => stream.append(v),
+                    None => stream.append_empty_data(),
                 };
-                let header = Header {
-                    list: true,
-                    payload_length: list.len(),
-                };
-                header.encode(&mut buf);
-                buf.extend_from_slice(&list);
-                buf
+                stream.out().to_vec()
             }
             Node::Extension(ext) => {
-                let borrow_ext = ext.read().expect("to read extension node");
-                let mut buf = Vec::<u8>::new();
-                let mut list = Vec::<u8>::new();
-                borrow_ext
-                    .prefix
-                    .encode_compact()
-                    .as_slice()
-                    .encode(&mut list);
+                let borrow_ext = ext.read().unwrap();
+
+                let mut stream = RlpStream::new_list(2);
+                stream.append(&borrow_ext.prefix.encode_compact());
                 match self.write_node(&borrow_ext.node) {
-                    EncodedNode::Hash(hash) => hash.as_slice().encode(&mut list),
-                    EncodedNode::Inline(data) => list.extend_from_slice(data.as_slice()),
+                    EncodedNode::Hash(hash) => stream.append(&hash.as_slice()),
+                    EncodedNode::Inline(data) => stream.append_raw(&data, 1),
                 };
-                let header = Header {
-                    list: true,
-                    payload_length: list.len(),
-                };
-                header.encode(&mut buf);
-                buf.extend_from_slice(&list);
-                buf
+                stream.out().to_vec()
             }
             Node::Hash(_hash) => unreachable!(),
         }
     }
 
-    fn decode_node(data: &mut &[u8]) -> TrieResult<Node> {
-        decode_node(data)
+    fn decode_node(data: &[u8]) -> Result<Node, DecoderError> {
+        let r = Rlp::new(data);
+
+        match r.prototype()? {
+            Prototype::Data(0) => Ok(Node::Empty),
+            Prototype::List(2) => {
+                let key = r.at(0)?.data()?;
+                let key = Nibbles::from_compact(key);
+
+                if key.is_leaf() {
+                    Ok(Node::from_leaf(key, r.at(1)?.data()?.to_vec()))
+                } else {
+                    let n = Self::decode_node(r.at(1)?.as_raw())?;
+
+                    Ok(Node::from_extension(key, n))
+                }
+            }
+            Prototype::List(17) => {
+                let mut nodes = empty_children();
+                #[allow(clippy::needless_range_loop)]
+                for i in 0..nodes.len() {
+                    let rlp_data = r.at(i)?;
+                    let n = Self::decode_node(rlp_data.as_raw())?;
+                    nodes[i] = n;
+                }
+
+                // The last element is a value node.
+                let value_rlp = r.at(16)?;
+                let value = if value_rlp.is_empty() {
+                    None
+                } else {
+                    Some(value_rlp.data()?.to_vec())
+                };
+
+                Ok(Node::from_branch(nodes, value))
+            }
+            _ => {
+                if r.is_data() && r.size() == HASHED_LENGTH {
+                    let hash = B256::from_slice(r.data()?);
+                    Ok(Node::from_hash(hash))
+                } else {
+                    Err(DecoderError::RlpInconsistentLengthAndData)
+                }
+            }
+        }
     }
 
     fn recover_from_db(&self, key: B256) -> TrieResult<Option<Node>> {
+        if key.0 == KECCAK_NULL_RLP.0 {
+            return Ok(Some(Node::Empty));
+        }
         let node = match self
             .db
             .get(key.as_slice())
             .map_err(|e| TrieError::DB(e.to_string()))?
         {
-            Some(value) => Some(Self::decode_node(&mut value.as_slice())?),
+            Some(value) => {
+                Some(Self::decode_node(&value).map_err(|e| TrieError::DB(e.to_string()))?)
+            }
             None => None,
         };
         Ok(node)
