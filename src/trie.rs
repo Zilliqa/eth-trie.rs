@@ -1,10 +1,11 @@
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 use std::vec;
 
 use alloy_primitives::{Bytes, B256};
 use alloy_rlp::{Buf, Header};
 use hashbrown::{HashMap, HashSet};
 use keccak_hash::{keccak, KECCAK_NULL_RLP};
+use parking_lot::RwLock;
 use rlp::{DecoderError, Prototype, Rlp, RlpStream};
 
 use crate::db::{MemoryDB, DB};
@@ -152,8 +153,7 @@ where
 
                             Node::Extension(ref ext) => {
                                 let cur_len = self.nibble.len();
-                                self.nibble
-                                    .truncate(cur_len - ext.read().unwrap().prefix.len());
+                                self.nibble.truncate(cur_len - ext.read().prefix.len());
                             }
 
                             Node::Branch(_) => {
@@ -165,8 +165,8 @@ where
                     }
 
                     (TraceStatus::Doing, Node::Extension(ref ext)) => {
-                        self.nibble.extend(&ext.read().unwrap().prefix);
-                        self.nodes.push((ext.read().unwrap().node.clone()).into());
+                        self.nibble.extend(&ext.read().prefix);
+                        self.nodes.push((ext.read().node.clone()).into());
                     }
 
                     (TraceStatus::Doing, Node::Leaf(ref leaf)) => {
@@ -175,7 +175,7 @@ where
                     }
 
                     (TraceStatus::Doing, Node::Branch(ref branch)) => {
-                        let value_option = branch.read().unwrap().value.clone();
+                        let value_option = branch.read().value.clone();
                         if let Some(value) = value_option {
                             return Some(Ok((self.nibble.encode_raw().0, value)));
                         } else {
@@ -212,7 +212,7 @@ where
                             self.nibble.push(i);
                         }
                         self.nodes
-                            .push((branch.read().unwrap().children[i as usize].clone()).into());
+                            .push((branch.read().children[i as usize].clone()).into());
                     }
 
                     (_, Node::Empty) => {
@@ -443,13 +443,13 @@ where
 
             match decoded_node {
                 Node::Extension(extension) => {
-                    let extension = extension.read().expect("Reading an extension should work");
+                    let extension = extension.read();
                     if let Node::Hash(hash_node) = &extension.node {
                         stack.push(hash_node.hash);
                     }
                 }
                 Node::Branch(branch) => {
-                    let branch = branch.read().expect("Reading a branch should work");
+                    let branch = branch.read();
                     for child in branch.children.iter() {
                         if let Node::Hash(hash_node) = child {
                             stack.push(hash_node.hash);
@@ -562,7 +562,7 @@ where
                 }
             }
             Node::Branch(branch) => {
-                let borrow_branch = branch.read().unwrap();
+                let borrow_branch = branch.read();
 
                 if prefix.is_empty() || prefix.at(0) == 16 {
                     Ok(source_node.clone())
@@ -572,7 +572,7 @@ where
                 }
             }
             Node::Extension(extension) => {
-                let extension = extension.read().unwrap();
+                let extension = extension.read();
 
                 // An extension node means all nodes under this point in the trie (under `extension.node`) have a
                 // common prefix of `extension.prefix`. If `prefix` is a prefix of `extension.prefix`, we make a
@@ -622,7 +622,7 @@ where
                 }
             }
             Node::Branch(branch) => {
-                let borrow_branch = branch.read().unwrap();
+                let borrow_branch = branch.read();
 
                 if partial.is_empty() || partial.at(0) == 16 {
                     Ok(borrow_branch.value.clone())
@@ -632,7 +632,7 @@ where
                 }
             }
             Node::Extension(extension) => {
-                let extension = extension.read().unwrap();
+                let extension = extension.read();
 
                 let prefix = &extension.prefix;
                 let match_len = partial.common_prefix(prefix);
@@ -696,7 +696,7 @@ where
                 ))
             }
             Node::Branch(branch) => {
-                let mut borrow_branch = branch.write().unwrap();
+                let mut borrow_branch = branch.write();
 
                 if partial.at(0) == 0x10 {
                     borrow_branch.value = Some(value);
@@ -709,7 +709,7 @@ where
                 Ok(Node::Branch(branch.clone()))
             }
             Node::Extension(ext) => {
-                let mut borrow_ext = ext.write().unwrap();
+                let mut borrow_ext = ext.write();
 
                 let prefix = &borrow_ext.prefix;
                 let sub_node = borrow_ext.node.clone();
@@ -777,7 +777,7 @@ where
                 Ok((Node::Leaf(leaf.clone()), false))
             }
             Node::Branch(branch) => {
-                let mut borrow_branch = branch.write().unwrap();
+                let mut borrow_branch = branch.write();
 
                 if partial.at(0) == 0x10 {
                     borrow_branch.value = None;
@@ -795,7 +795,7 @@ where
                 Ok((Node::Branch(branch.clone()), deleted))
             }
             Node::Extension(ext) => {
-                let mut borrow_ext = ext.write().unwrap();
+                let mut borrow_ext = ext.write();
 
                 let prefix = &borrow_ext.prefix;
                 let match_len = partial.common_prefix(prefix);
@@ -842,7 +842,7 @@ where
     fn degenerate(&mut self, n: Node) -> TrieResult<Node> {
         match n {
             Node::Branch(branch) => {
-                let borrow_branch = branch.read().unwrap();
+                let borrow_branch = branch.read();
 
                 let mut used_indexs = vec![];
                 for (index, node) in borrow_branch.children.iter().enumerate() {
@@ -869,12 +869,12 @@ where
                 }
             }
             Node::Extension(ext) => {
-                let borrow_ext = ext.read().unwrap();
+                let borrow_ext = ext.read();
 
                 let prefix = &borrow_ext.prefix;
                 match borrow_ext.node.clone() {
                     Node::Extension(sub_ext) => {
-                        let borrow_sub_ext = sub_ext.read().unwrap();
+                        let borrow_sub_ext = sub_ext.read();
 
                         let new_prefix = prefix.join(&borrow_sub_ext.prefix);
                         let new_n = Node::from_extension(new_prefix, borrow_sub_ext.node.clone());
@@ -924,7 +924,7 @@ where
         match source_node {
             Node::Empty | Node::Leaf(_) => Ok(vec![]),
             Node::Branch(branch) => {
-                let borrow_branch = branch.read().unwrap();
+                let borrow_branch = branch.read();
 
                 if partial.is_empty() || partial.at(0) == 16 {
                     Ok(vec![])
@@ -934,7 +934,7 @@ where
                 }
             }
             Node::Extension(ext) => {
-                let borrow_ext = ext.read().unwrap();
+                let borrow_ext = ext.read();
 
                 let prefix = &borrow_ext.prefix;
                 let match_len = partial.common_prefix(prefix);
@@ -1041,7 +1041,7 @@ where
                 stream.out().to_vec()
             }
             Node::Branch(branch) => {
-                let borrow_branch = branch.read().unwrap();
+                let borrow_branch = branch.read();
 
                 let mut stream = RlpStream::new_list(17);
                 for i in 0..16 {
@@ -1059,7 +1059,7 @@ where
                 stream.out().to_vec()
             }
             Node::Extension(ext) => {
-                let borrow_ext = ext.read().unwrap();
+                let borrow_ext = ext.read();
 
                 let mut stream = RlpStream::new_list(2);
                 stream.append(&borrow_ext.prefix.encode_compact());

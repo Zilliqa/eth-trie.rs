@@ -1,6 +1,7 @@
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 
 use alloy_primitives::B256;
+use parking_lot::RwLock;
 
 use crate::nibbles::Nibbles;
 
