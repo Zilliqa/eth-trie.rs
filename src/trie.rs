@@ -191,6 +191,7 @@ where
                                 self.nodes.push(node.into());
                             }
                             Ok(None) => {
+                                tracing::warn!("Missing trie node {node_hash}. Skipping...");
                                 return Some(Err(TrieError::MissingTrieNode {
                                     node_hash,
                                     traversed: Some(self.nibble.clone()),
