@@ -316,7 +316,7 @@ where
                     db,
                 };
 
-                trie.root = EthTrie::<D>::decode_node(&mut data.as_slice())
+                trie.root = EthTrie::<D>::decode_node(data.as_slice())
                     .map_err(|e| TrieError::DB(e.to_string()))?;
                 Ok(trie)
             }
@@ -1300,10 +1300,7 @@ mod tests {
             assert_eq!(missing_trie_node, expected_error);
         } else {
             // The only acceptable result here was a MissingTrieNode
-            panic!(
-                "Must get a MissingTrieNode when database entry is missing, but got {:?}",
-                result
-            );
+            panic!("Must get a MissingTrieNode when database entry is missing, but got {result:?}",);
         }
     }
 
@@ -1324,10 +1321,7 @@ mod tests {
             assert_eq!(missing_trie_node, expected_error);
         } else {
             // The only acceptable result here was a MissingTrieNode
-            panic!(
-                "Must get a MissingTrieNode when database entry is missing, but got {:?}",
-                result
-            );
+            panic!("Must get a MissingTrieNode when database entry is missing, but got {result:?}",);
         }
     }
 
@@ -1348,10 +1342,7 @@ mod tests {
             assert_eq!(missing_trie_node, expected_error);
         } else {
             // The only acceptable result here was a MissingTrieNode
-            panic!(
-                "Must get a MissingTrieNode when database entry is missing, but got {:?}",
-                result
-            );
+            panic!("Must get a MissingTrieNode when database entry is missing, but got {result:?}",);
         }
     }
 
@@ -1372,10 +1363,7 @@ mod tests {
             assert_eq!(missing_trie_node, expected_error);
         } else {
             // The only acceptable result here was a MissingTrieNode
-            panic!(
-                "Must get a MissingTrieNode when database entry is missing, but got {:?}",
-                result
-            );
+            panic!("Must get a MissingTrieNode when database entry is missing, but got {result:?}",);
         }
     }
 
@@ -1396,10 +1384,7 @@ mod tests {
             assert_eq!(missing_trie_node, expected_error);
         } else {
             // The only acceptable result here was a MissingTrieNode
-            panic!(
-                "Must get a MissingTrieNode when database entry is missing, but got {:?}",
-                result
-            );
+            panic!("Must get a MissingTrieNode when database entry is missing, but got {result:?}",);
         }
     }
 
